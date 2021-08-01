@@ -1,12 +1,8 @@
 import socket
-import os
 from threading import Thread
 import atexit
-import queue
-import signal
-import sys
 import time
-
+import pickle
 import functools
 #always flush output by default, useful in testing
 print = functools.partial(print, flush=True)
@@ -20,7 +16,7 @@ print = functools.partial(print, flush=True)
 # If you (server) wants to send a message,
 #  use broadcast(msg) to send to all 
 #  or send_to(tid, msg) to send to single thread/client
-# Optionally run end_server before exiting. This should be taken care of by atexit handler though
+# Optionally run end before exiting. This should be taken care of by atexit handler though
 class GenericServer:
     def __init__(self, max_connections, host, port, debug=False):
         self.max_connections = max_connections
@@ -80,40 +76,32 @@ class GenericServer:
         self.dprint("initialised child thread")
         atexit.register(self.close_connection, connection)
         
-        
-        #send a WHO message to ask who is playing
-        #connection.send(str.encode("WHO?"))
-
         #Parse messages in loop
         while self.thread_status[tid]:
             try:
-                data = connection.recv(self.max_data_size).decode('utf-8')
+                data = connection.recv(self.max_data_size)
             except:
                 self.dprint("connection dropped.")
                 exit()
-            self.dprint("SERVER RECV: ", data)
+            self.dprint("RECV: ", data.decode('utf-8'))
             
             self.parse_message(data, tid)
 
         self.close_connection(connection)
 
-    #fcn to apply logic of server. Example below
-    def parse_message(self, msg, tid):
-        pass
-
     #fcn to send data to all clients
-    def broadcast_message(self, msg):
+    def broadcast_message(self, msg, **kwargs):
         for tid in range(len(self.connections)):
-            self.send_message(msg, tid)
+            self.send_message(msg, tid, **kwargs)
 
     #fcn to send data to specified client
-    def send_message(self, msg, tid):
+    def send_message(self, msg, tid, **kwargs):
         connection = self.connections[tid]
-        connection.sendall(str.encode(msg))
+        connection.sendall(self.encode(msg, **kwargs))
         self.last_send = time.time()
 
     #fcn to close all connections, can be called multiple times without error
-    def end_server(self):
+    def end(self):
         self.dprint("end server:")
         self.running = False
         for connection in self.connections:
@@ -132,6 +120,77 @@ class GenericServer:
         connection.close()
 
 
+    #encode object to be sent. This can (should be overridden)
+    def encode(self, obj, **kwargs):
+        return str.encode(obj)
+
+    #fcn to apply logic of server. (including decode) Example below
+    def parse_message(self, data, tid):
+        #remember to decode data here!
+        pass
+
+
+#inherit from this to allow sending objects, and defining a generic header to allow more functionality
+# How to send objs? Sends a pickled dict { key: value,... } where self.__dict__[key] = value
+class GenericHeader:
+    #sets header. Tells decode function what to do for diff codes.
+    def set_header(self, header_size=None, codes=None, fcns=None):
+        #without any special codes given, only has object send functionality
+        object_recv_code = 0
+        self.codes = [object_recv_code]
+        if codes is not None:
+            self.codes += codes
+            
+        object_recv_fcn = self.set_state
+        self.fcns = [object_recv_fcn]
+        if fcns is not None:
+            self.fcns += fcns
+            
+        if header_size is not None:
+            self.header_size = header_size
+        else:
+            self.header_size = 1 + len(codes)//256 #256 = 1B
+
+    def encode(self, obj, header=None, pickle=False, **kwargs):
+        if header is  None:
+            #Ideally, this won't happen. In case it does, give it an invalid code
+            header = len(self.codes) 
+        header = header.to_bytes(self.header_size, "big")
+        data = obj
+        if pickle:
+            data = self.obj_to_bytestring(data)
+        else:
+            data = str.encode(data)
+        return header + data
+        
+
+    def decode(self, msg):
+        header = int.from_bytes(msg[:self.header_size], "big")
+        data = msg[self.header_size:]
+        for code, fcn in zip(self.header_codes, self.header_fcns):
+            if header == code:
+                fcn(data)
+                break
+        else:
+            #was not a special message. assume that data is a string /not pickled.
+            return header, data.decode('utf-8')
+
+    def set_state(self, data):
+        state = self.bytestring_to_obj(data)
+        for key in state:
+            self.__dict__[key] = state[key]
+        
+    #fcn to change object to byte str
+    def obj_to_bytestring(self, obj):
+        return pickle.dumps(obj)
+
+    #fcn to convert byte str to object
+    def bytestring_to_obj(self, bytestring):
+        return pickle.loads(bytestring)
+
+
+
+
 #here is an example of a parse_message function, and an example main below
 class ExampleServer(GenericServer):
     def __init__(self, max_connections, host, port, debug=True):
@@ -139,8 +198,8 @@ class ExampleServer(GenericServer):
 
     def parse_message(self, msg, tid):
         #sample / test function
-        header = msg[:2]
-        msg = msg[2:]
+        header, msg = self.decode(msg)
+    
         #broadcast
         if "bc" in header:
             self.broadcast_message("C{} sends bc message `{}`".format(tid, msg))
@@ -152,16 +211,22 @@ class ExampleServer(GenericServer):
             self.dprint("sent msg from/to ", tid, recv_tid)
         elif "ab" in header:
             self.dprint("Aborting server")
-            self.end_server()
+            self.end()
         else:
             self.dprint("sending msg back to client")
             self.send_message("you sent a message, you are C{}".format(tid), tid)
+
+    def decode(self, msg):
+        header = msg[:2].decode('utf-8')
+        #given header, know how you should decode msg.
+        msg = msg[2:].decode('utf-8')
+        return header, msg
 
 
 #main, script to test using ExampleServer
 def main():
     host = '127.0.0.1'
-    port = 1018
+    port = 1020
     print("creating server thread")
     serv = ExampleServer(5, host, port, debug=True)
     serv.run()
@@ -179,7 +244,7 @@ def main():
             break
 
     print("end.")
-    serv.end_server()
+    serv.end()
     
 if __name__ == "__main__":
     main()
