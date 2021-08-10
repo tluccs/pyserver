@@ -122,6 +122,7 @@ class GenericServer:
 
     #encode object to be sent. This can (should be overridden)
     def encode(self, obj, **kwargs):
+        self.dprint("Using base (str) encode!")
         return str.encode(obj)
 
     #fcn to apply logic of server. (including decode) Example below
@@ -133,7 +134,7 @@ class GenericServer:
 #inherit from this to allow sending objects, and defining a generic header to allow more functionality
 # How to send objs? Sends a pickled dict { key: value,... } where self.__dict__[key] = value
 class GenericHeader:
-    #sets header. Tells decode function what to do for diff codes.
+    #sets header. Tells decode function what to do for diff codes. any fcn in fcns should be a self fcn and take in data (as bytestring) + kwargs
     def set_header(self, header_size=None, codes=None, fcns=None):
         #without any special codes given, only has object send functionality
         object_recv_code = 0
@@ -150,6 +151,7 @@ class GenericHeader:
             self.header_size = header_size
         else:
             self.header_size = 1 + len(codes)//256 #256 = 1B
+        self.dprint("Set header size to ", self.header_size)
 
     def encode(self, obj, header=None, pickle=False, **kwargs):
         if header is  None:
@@ -164,18 +166,20 @@ class GenericHeader:
         return header + data
         
 
-    def decode(self, msg):
+    #returns status, header, data. (status True indicates message already processed)
+    def decode(self, msg, **kwargs):
         header = int.from_bytes(msg[:self.header_size], "big")
         data = msg[self.header_size:]
-        for code, fcn in zip(self.header_codes, self.header_fcns):
+        #self.dprint("DECODE: header={} from bytestring={}".format(header, msg[:self.header_size]))
+        for code, fcn in zip(self.codes, self.fcns):
             if header == code:
-                fcn(data)
-                break
+                fcn(data, **kwargs)
+                return True, None, None
         else:
             #was not a special message. assume that data is a string /not pickled.
-            return header, data.decode('utf-8')
+            return header, header, data.decode('utf-8')
 
-    def set_state(self, data):
+    def set_state(self, data, **kwargs):
         state = self.bytestring_to_obj(data)
         for key in state:
             self.__dict__[key] = state[key]
@@ -187,8 +191,6 @@ class GenericHeader:
     #fcn to convert byte str to object
     def bytestring_to_obj(self, bytestring):
         return pickle.loads(bytestring)
-
-
 
 
 #here is an example of a parse_message function, and an example main below
@@ -222,13 +224,67 @@ class ExampleServer(GenericServer):
         msg = msg[2:].decode('utf-8')
         return header, msg
 
+class ExampleServerWithHeader(GenericHeader, GenericServer):
+    def __init__(self, max_connections, host, port, debug=True):
+        super().__init__(max_connections, host, port, debug)
+        self.set_header(codes=[1], fcns=[self.tid_request])
+        #these 3 are to test the genericHeader object send functionality
+        self.test_var_int = 1
+        self.test_var_str = "hi"
+        self.test_var_arr = [1, 2, ["asd"]]
 
-#main, script to test using ExampleServer
+    def tid_request(self, data, tid=None):
+        if tid is None:
+            self.dprint("ERROR: tid should not be None in tid_request")
+            return
+        #client sent header=1 message to us, we sent header=1, msg=tid message to client
+        msg = str(tid)
+        header = 1 
+        #header should be int, msg should be str
+        self.dprint("serv in tid_request, sending msg,header, to tid:", msg, header, tid)
+        self.send_message(msg, tid, header=header)
+
+    def parse_message(self, data, tid):
+        #sample / test function
+        decoded, header, msg = self.decode(data, tid=tid)
+        #check if message could be decoded by the header.
+        if decoded:
+            self.dprint("decoded the message with header, msg", header, msg)
+            return 
+
+        code_len = len(self.codes) #should be 2 here
+        #broadcast
+        if header == code_len:
+            self.broadcast_message("C{} sends bc message `{}`".format(tid, msg))
+            self.dprint("broadcast from ", tid)
+            return
+        #single message
+        elif code_len < header < self.max_connections+code_len:
+            recv_tid = header - code_len -1
+            self.send_message("C{} sends single message `{}` to C{}".format(tid, msg, recv_tid), recv_tid, header)
+            self.dprint("sent msg from/to ", tid, recv_tid)
+        elif header == 100:
+            self.dprint("Aborting server")
+            self.end()
+        else:
+            self.dprint("sending msg back to client")
+            self.send_message("you sent a message, you are C{}".format(tid), tid)
+
+
+#main, script to test
 def main():
+    #TODO make these cmd line args
+    run_example = False
+    run_example_with_header = True 
     host = '127.0.0.1'
     port = 1020
+    
     print("creating server thread")
-    serv = ExampleServer(5, host, port, debug=True)
+    if run_example:
+        serv = ExampleServer(5, host, port, debug=True)
+    elif run_example_with_header:
+        serv = ExampleServerWithHeader(5, host, port, debug=True)
+
     serv.run()
     i = 0
     period = 10
