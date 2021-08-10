@@ -47,7 +47,11 @@ class GenericClient(GenericServer):
             except:
                 self.dprint("connection dropped.")
                 exit()
-            self.dprint("RECV: ", data.decode('utf-8'))
+            try:
+                msg =  data.decode('utf-8')
+                self.dprint("RECV: ", msg)
+            except:
+                self.dprint("RECV: data can't be converted to utf8")
             
             self.parse_message(data)
 
@@ -174,7 +178,9 @@ def main():
             print("t2 send")
             client.send_message(4, "This should be C 2->1", wait_before_sending=1)
 
-        time.sleep(3)
+        client.send_message(101, "Test, requesting your state", wait_before_sending=1)
+        time.sleep(2)
+        print("Checking if client has correct state vars: {}, {}, {}".format(client.test_var_int, client.test_var_arr, client.test_var_str ))
         #if > 4, theres a mistake somewhere, just abort
         if tid == 0 or tid > 4:
             client.send_message(100, "ab...")

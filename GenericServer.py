@@ -83,8 +83,13 @@ class GenericServer:
             except:
                 self.dprint("connection dropped.")
                 exit()
-            self.dprint("RECV: ", data.decode('utf-8'))
             
+            try:
+                msg =  data.decode('utf-8')
+                self.dprint("RECV: ", msg)
+            except:
+                self.dprint("RECV: data can't be converted to utf8")
+
             self.parse_message(data, tid)
 
         self.close_connection(connection)
@@ -177,10 +182,11 @@ class GenericHeader:
                 return True, None, None
         else:
             #was not a special message. assume that data is a string /not pickled.
-            return header, header, data.decode('utf-8')
+            return False, header, data.decode('utf-8')
 
     def set_state(self, data, **kwargs):
         state = self.bytestring_to_obj(data)
+        self.dprint("received state: ", state)
         for key in state:
             self.__dict__[key] = state[key]
         
@@ -255,20 +261,22 @@ class ExampleServerWithHeader(GenericHeader, GenericServer):
         code_len = len(self.codes) #should be 2 here
         #broadcast
         if header == code_len:
-            self.broadcast_message("C{} sends bc message `{}`".format(tid, msg))
+            self.broadcast_message("C{} sends bc message `{}`".format(tid, msg), header=header)
             self.dprint("broadcast from ", tid)
             return
         #single message
         elif code_len < header < self.max_connections+code_len:
             recv_tid = header - code_len -1
-            self.send_message("C{} sends single message `{}` to C{}".format(tid, msg, recv_tid), recv_tid, header)
+            self.send_message("C{} sends single message `{}` to C{}".format(tid, msg, recv_tid), recv_tid, header=header)
             self.dprint("sent msg from/to ", tid, recv_tid)
         elif header == 100:
             self.dprint("Aborting server")
             self.end()
         else:
-            self.dprint("sending msg back to client")
-            self.send_message("you sent a message, you are C{}".format(tid), tid)
+            #test sending state
+            self.dprint("sending my state to client")
+            state_dict = {"test_var_int": self.test_var_int, "test_var_arr": self.test_var_arr, "test_var_str": self.test_var_str}
+            self.send_message(state_dict, tid, header=0, pickle=True)
 
 
 #main, script to test
