@@ -37,7 +37,7 @@ class GenericServer:
         atexit.register(self.close_connection, self.server_socket)
         self.server_thread = Thread(target=self.thread_for_server)
         #save time of last message sent, can be used to debug / check progress of server
-        self.last_send = time.time()
+        self.last_send = 0
 
     #start server
     def run(self):
@@ -140,28 +140,34 @@ class GenericServer:
 # How to send objs? Sends a pickled dict { key: value,... } where self.__dict__[key] = value
 class GenericHeader:
     #sets header. Tells decode function what to do for diff codes. any fcn in fcns should be a self fcn and take in data (as bytestring) + kwargs
-    def set_header(self, header_size=None, codes=None, fcns=None):
-        #without any special codes given, only has object send functionality
-        object_recv_code = 0
-        self.codes = [object_recv_code]
+    def set_header(self, header_size=None, codes=None, fcns=None, object_send=True):
+        if object_send:
+            #without any special codes given, only has object send functionality
+            object_recv_code = 0
+            self.codes = [object_recv_code]
+            object_recv_fcn = self.set_state
+            self.fcns = [object_recv_fcn]
+        else:
+            self.codes = []
+            self.fcns = []
+
         if codes is not None:
             self.codes += codes
             
-        object_recv_fcn = self.set_state
-        self.fcns = [object_recv_fcn]
+        
         if fcns is not None:
             self.fcns += fcns
             
         if header_size is not None:
             self.header_size = header_size
         else:
-            self.header_size = 1 + len(codes)//256 #256 = 1B
+            self.header_size = 1 + len(self.codes)//256 #256 = 1B
         self.dprint("Set header size to ", self.header_size)
 
     def encode(self, obj, header=None, pickle=False, **kwargs):
         if header is  None:
             #Ideally, this won't happen. In case it does, give it an invalid code
-            header = len(self.codes) 
+            header = max(self.codes)+1 
         header = header.to_bytes(self.header_size, "big")
         data = obj
         if pickle:

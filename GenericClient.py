@@ -4,8 +4,10 @@ from threading import Thread
 import atexit
 import time
 import functools
-from GenericServer import *
-#from pyserver.GenericServer import *
+import sys
+sys.path.append('../')
+from pyserver.GenericServer import *
+#from GenericServer import *
 
 #always flush output by default
 print = functools.partial(print, flush=True)
