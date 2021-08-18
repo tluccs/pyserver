@@ -5,7 +5,7 @@ import sys
 sys.path.append('../')
 from pyserver.GenericServer import *
 from pyserver.GenericClient import *
-from UNO import uno
+from pyserver.UNO import uno
 
 
 class UnoClient(GenericHeader, GenericClient):

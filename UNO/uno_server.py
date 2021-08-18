@@ -1,10 +1,10 @@
-#python uno_server.py
+#python UNO/uno_server.py
 import os
 import sys
 sys.path.append('../')
 #print(sys.path)
 from pyserver.GenericServer import *
-from UNO import uno
+from pyserver.UNO import uno
 
 #UnoServer:
 #   Clients will have the client version of unogame class- 
